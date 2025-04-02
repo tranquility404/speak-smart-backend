@@ -1,4 +1,3 @@
-import asyncio
 import time
 from datetime import datetime, timezone
 import json
@@ -6,10 +5,8 @@ import os
 import uuid
 from dataclasses import asdict
 import asyncio
-import threading
-from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, Depends, Body, WebSocket, WebSocketDisconnect, UploadFile, File, Query, BackgroundTasks, \
+from fastapi import APIRouter, Depends, Body, UploadFile, File, BackgroundTasks, \
     HTTPException
 from pydantic import BaseModel
 from starlette.responses import JSONResponse
@@ -84,8 +81,6 @@ def convert_report_to_string(analysis_report: AnalysisReport|dict):
         data = json.dumps(analysis_report, indent=4, default=custom_serializer)
     return data
 
-task_executor = ThreadPoolExecutor(max_workers=5)  # Adjust number based on your server's capacity
-
 @router.post("/upload-audio/")
 async def upload_audio(
         background_tasks: BackgroundTasks,
@@ -114,8 +109,8 @@ async def upload_audio(
     }
 
     # Start the analysis in a separate thread to not block the event loop
-    task_executor.submit(
-        run_analysis_in_thread,
+    background_tasks.add_task(
+        run_analysis_tasks,
         uid,
         file_path,
         analyze_speech,
@@ -131,8 +126,8 @@ async def upload_audio(
         "id": uid
     })
 
-def run_analysis_in_thread(uid: str, file_path: str, analyze_speech: AnalyzeSpeech, analysis_report: AnalysisReport, user_email: str):
-    """Run the analysis tasks in a separate thread"""
+def run_analysis_tasks(uid: str, file_path: str, analyze_speech: AnalyzeSpeech, analysis_report: AnalysisReport, user_email: str):
+    """Run the analysis tasks in a background"""
     try:
         tasks = [
             ("load_audio", lambda: load_audio(file_path, analyze_speech)),
