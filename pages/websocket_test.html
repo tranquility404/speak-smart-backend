@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Live Data</title>
+    <script>
+        var ws;
+        function connect() {
+            id = document.getElementById('websocket-id').value;
+            url = "ws://localhost:8000/analysis-report/" + id;
+            console.log("url", url);
+            ws = new WebSocket(url);
+            ws.onopen = function() {
+                document.getElementById("status").innerText = "Connected";
+            };
+            ws.onmessage = function(event) {
+                list = document.getElementById("data");
+                data = document.createElement("li");
+                data.innerText = "Received Data: " + event.data;
+                list.appendChild(data);
+            };
+            ws.onclose = function() {
+                document.getElementById("status").innerText = "Disconnected";
+            };
+        }
+        function disconnect() {
+            if (ws) {
+                ws.close();
+            }
+        }
+    </script>
+</head>
+<body>
+<h1>WebSocket Live Data</h1>
+<h3>Websocket Id:</h3>
+<input type='text' id='websocket-id' value='test-id-123' />
+<p>Status: <span id="status">Disconnected</span></p>
+<button onclick="connect()">Connect</button>
+<button onclick="disconnect()">Disconnect</button>
+<ol id="data"></ol>
+</body>
+</html>
