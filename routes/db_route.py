@@ -18,7 +18,7 @@ def document_to_json(doc):
 
 @router.get("/recent-analysis", response_model=List[dict])
 async def recent_analysis(current_user: User = Depends(get_current_user)):
-    entries = await analysis_data_collection.find({"email": current_user.email}).sort("_id", -1).limit(10).to_list(length=10)
+    entries = await analysis_data_collection.find({"requested_by": current_user["email"]}).sort("_id", -1).limit(10).to_list(length=10)
     return [document_to_json(entry) for entry in entries]
 
 @router.get("/get-analysis/{item_id}")
