@@ -1,11 +1,16 @@
 import asyncio
+import time
 from datetime import datetime, timezone
 import json
 import os
 import uuid
 from dataclasses import asdict
+import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, Depends, Body, WebSocket, WebSocketDisconnect, UploadFile, File, Query
+from fastapi import APIRouter, Depends, Body, WebSocket, WebSocketDisconnect, UploadFile, File, Query, BackgroundTasks, \
+    HTTPException
 from pydantic import BaseModel
 from starlette.responses import JSONResponse
 from bson import ObjectId
@@ -79,88 +84,143 @@ def convert_report_to_string(analysis_report: AnalysisReport|dict):
         data = json.dumps(analysis_report, indent=4, default=custom_serializer)
     return data
 
-@router.websocket("/analysis-report/{id}")
-async def websocket_endpoint(websocket: WebSocket, id: str, token: str = Query(None)):
-    current_user = await get_current_user_websocket(token)
-    if not token or not current_user:
-        await websocket.close(code=1008)  # 1008: Policy Violation
-        return
-
-    print(id)
-    if not id in analysis_requests:
-        return
-
-    await websocket.accept()
-    file_path: str = analysis_requests[id]["file_path"]
-    analysis_report: AnalysisReport = analysis_requests[id]["report"]
-
-    try:
-        analyze_speech: AnalyzeSpeech = analysis_requests[id]["analyze_speech_obj"]
-        data = convert_report_to_string(analysis_report)
-        await websocket.send_text(data)
-
-        if json.loads(data)["intonation_fig"]["status"] == "Loaded✅":
-            print("audio already analysed")
-            return
-
-        tasks = [
-            lambda: load_audio(file_path, analyze_speech),
-            lambda: get_transcription(file_path, analyze_speech, analysis_report),
-            lambda: get_speech_rate(analyze_speech, analysis_report),
-            lambda: get_intonation(analyze_speech, analysis_report),
-            lambda: get_energy(analyze_speech, analysis_report),
-            lambda: get_confidence(analyze_speech, analysis_report),
-            lambda: get_conversation_score(analyze_speech, analysis_report),
-            lambda: get_vocal_analysis(analyze_speech, analysis_report),
-            lambda: get_speech_rate_fig(analyze_speech, analysis_report),
-            lambda: get_intonation_fig(analyze_speech, analysis_report),
-        ]
-
-        for completed_task in tasks:
-            completed_task()
-            await websocket.send_text(convert_report_to_string(analysis_report))
-
-        # Saving Report
-        id = ObjectId()
-        data = convert_report_to_string(analysis_report)
-        analysis_report_url = clean_up(str(id), file_path, data)
-        await save_report_to_db(id, analysis_report_url, analysis_report, str(current_user["email"]))
-
-        analysis_report.status = "Loaded✅"
-        await websocket.send_text(convert_report_to_string(analysis_report))
-
-    except WebSocketDisconnect as e:
-        print("websocket closed", e.reason)
-    finally:
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            print("File deleted due to error or disconnection or analysis completion.")
-
+task_executor = ThreadPoolExecutor(max_workers=5)  # Adjust number based on your server's capacity
 
 @router.post("/upload-audio/")
-async def upload_audio(file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
+async def upload_audio(
+        background_tasks: BackgroundTasks,
+        file: UploadFile = File(...),
+        current_user: User = Depends(get_current_user)
+):
     print(file.filename)
 
     file_path = await save_file(file)
     file_path = str(file_path)
     audio_base64 = audio_to_base64(file_path)
 
-    print(file_path)
+    print("file saved", file_path)
     uid = uuid.uuid4()
     uid = str(uid)
 
+    analyze_speech = AnalyzeSpeech()
+    analysis_report = AnalysisReport(audio_base64=audio_base64)
+
     analysis_requests[uid] = {
         "file_path": file_path,
-        "analyze_speech_obj": AnalyzeSpeech(),
-        "report": AnalysisReport(audio_base64=audio_base64)
+        "analyze_speech_obj": analyze_speech,
+        "report": analysis_report,
+        "current_task": None,
+        "last_update": asyncio.get_event_loop().time()
     }
 
+    # Start the analysis in a separate thread to not block the event loop
+    task_executor.submit(
+        run_analysis_in_thread,
+        uid,
+        file_path,
+        analyze_speech,
+        analysis_report,
+        str(current_user["email"])
+    )
+
+    # Cleanup task - keep this async
     asyncio.create_task(remove_file_after_timeout(uid))
-    print("file saved: ", file_path)
-    # os.unlink(file_path)
 
-    return JSONResponse(content={"status": "uploaded successfully", "id": uid})
+    return JSONResponse(content={
+        "status": "uploaded successfully",
+        "id": uid
+    })
 
+def run_analysis_in_thread(uid: str, file_path: str, analyze_speech: AnalyzeSpeech, analysis_report: AnalysisReport, user_email: str):
+    """Run the analysis tasks in a separate thread"""
+    try:
+        tasks = [
+            ("load_audio", lambda: load_audio(file_path, analyze_speech)),
+            ("transcription", lambda: get_transcription(file_path, analyze_speech, analysis_report)),
+            ("speech_rate", lambda: get_speech_rate(analyze_speech, analysis_report)),
+            ("intonation", lambda: get_intonation(analyze_speech, analysis_report)),
+            ("energy", lambda: get_energy(analyze_speech, analysis_report)),
+            ("confidence", lambda: get_confidence(analyze_speech, analysis_report)),
+            ("conversation_score", lambda: get_conversation_score(analyze_speech, analysis_report)),
+            ("vocal_analysis", lambda: get_vocal_analysis(analyze_speech, analysis_report)),
+            ("speech_rate_fig", lambda: get_speech_rate_fig(analyze_speech, analysis_report)),
+            ("intonation_fig", lambda: get_intonation_fig(analyze_speech, analysis_report)),
+        ]
+
+        for task_name, task_func in tasks:
+            # Update the current task with thread-safe updates
+            update_analysis_status(uid, task_name)
+
+            # Execute the task
+            task_func()
+
+            if uid in analysis_requests:
+                analysis_requests[uid]["report"] = analysis_report
+
+            # Small sleep to prevent hogging CPU
+            time.sleep(0.1)
+
+        # After all tasks complete, save the report
+        id = ObjectId()
+        data = convert_report_to_string(analysis_report)
+        analysis_report_url = clean_up(str(id), file_path, data)
+
+        # Run the DB save operation in the event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(save_report_to_db(id, analysis_report_url, analysis_report, user_email))
+        loop.close()
+
+        # Mark as complete
+        analysis_report.status = "Loaded✅"
+        update_analysis_status(uid, None)
+
+    except Exception as e:
+        print(f"Error in background analysis for {uid}: {str(e)}")
+        analysis_report.status = "Loaded✅"
+        if uid in analysis_requests:
+            analysis_requests[uid]["report"] = analysis_report
+
+
+def update_analysis_status(uid: str, task_name=None, error=None):
+    """Thread-safe update of the analysis status"""
+    try:
+        if uid in analysis_requests:
+            if task_name is not None:
+                analysis_requests[uid]["current_task"] = task_name
+            if error is not None:
+                analysis_requests[uid]["error"] = error
+            # Update timestamp using system time instead of event loop time
+            analysis_requests[uid]["last_update"] = time.time()
+    except Exception as e:
+        print(f"Error updating analysis status: {str(e)}")
+
+
+@router.get("/analysis-status/{id}")
+async def get_analysis_status(id: str, current_user: User = Depends(get_current_user)):
+    """Regular HTTP endpoint to check current analysis status"""
+    if id not in analysis_requests:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    analysis_report = analysis_requests[id]["report"]
+
+    # Get the current state
+    try:
+        # Add additional status info to the response
+        result = json.loads(convert_report_to_string(analysis_report))
+        result["current_task"] = analysis_requests[id]["current_task"]
+
+        # Add error info if present
+        if "error" in analysis_requests[id]:
+            result["error"] = analysis_requests[id]["error"]
+
+        return result
+    except Exception as e:
+        # Fallback to simpler response if there's an error
+        return {
+            "current_task": analysis_requests[id]["current_task"],
+            "error": str(e)
+        }
 
 @router.post("/generate-random-topics")
 async def random_topics(current_user: User = Depends(get_current_user)):
