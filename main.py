@@ -22,10 +22,12 @@ async def lifespan(app: FastAPI):
     client.close()  # Cleanup when shutting down
 
 app = FastAPI(lifespan=lifespan)
+origins = os.getenv("ALLOWED_ORIGINS", "").split(",")
+print(origins)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("ALLOWED_ORIGINS", "").split(","),
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
