@@ -63,7 +63,7 @@ async def save_report_to_db(id: ObjectId, analysis_report_url: str, analysis_rep
     result = await analysis_data_collection.insert_one(analysis_data)
     print("Report saved successfully", "id", str(result.inserted_id))
 
-async def remove_file_after_timeout(uid: str, timeout: int = 1800):  # clear files after 30 mins
+async def remove_file_after_timeout(uid: str, timeout: int = 600):  # clear files after 10 mins
     await asyncio.sleep(timeout)
     if uid in analysis_requests:
         file_path = analysis_requests[uid]["file_path"]
@@ -126,6 +126,9 @@ async def websocket_endpoint(websocket: WebSocket, id: str, token: str = Query(N
         analysis_report_url = clean_up(str(id), file_path, data)
         await save_report_to_db(id, analysis_report_url, analysis_report, str(current_user["email"]))
 
+        analysis_report.status = "Loaded✅"
+        await websocket.send_text(convert_report_to_string(analysis_report))
+
     except WebSocketDisconnect as e:
         print("websocket closed", e.reason)
     finally:
@@ -153,6 +156,7 @@ async def upload_audio(file: UploadFile = File(...), current_user: User = Depend
     }
 
     asyncio.create_task(remove_file_after_timeout(uid))
+    print("file saved: ", file_path)
     # os.unlink(file_path)
 
     return JSONResponse(content={"status": "uploaded successfully", "id": uid})

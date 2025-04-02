@@ -47,6 +47,7 @@ class AnalysisReport:
 
     speech_rate_fig: Task[str]
     intonation_fig: Task[str]
+    status: str = "In Progress..."
 
     # awkward_pause: Task[Param] = Task[Param]()
 
@@ -56,13 +57,14 @@ class AnalysisReport:
         self.speech_rate: Task[SpeechRateDto] = Task[SpeechRateDto]()
         self.intonation: Task[Param] = Task[Param]()
         self.energy: Task[Param] = Task[Param]()
-        self.confidence: Task[int] = Task[int]()
+        self.confidence: Task[Param] = Task[Param]()
         self.conversation_score: Task[int] = Task[int]()
 
         self.vocab_analysis: Task[VocabAnalysis] = Task[VocabAnalysis]()
 
         self.speech_rate_fig: Task[str] = Task[str]()
         self.intonation_fig: Task[str] = Task[str]()
+        self.status = "In Progress..."
 
 def custom_serializer(o):
     if isinstance(o, np.ndarray):
