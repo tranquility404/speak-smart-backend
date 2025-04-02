@@ -81,15 +81,12 @@ def convert_report_to_string(analysis_report: AnalysisReport|dict):
 
 @router.websocket("/analysis-report/{id}")
 async def websocket_endpoint(websocket: WebSocket, id: str, token: str = Query(None)):
-    print(id)
-    print(analysis_requests)
     current_user = await get_current_user_websocket(token)
-    print(current_user)
     if not token or not current_user:
         await websocket.close(code=1008)  # 1008: Policy Violation
         return
 
-    print(id)
+    print("websocket started for id", id)
     if not id in analysis_requests:
         return
 
