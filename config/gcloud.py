@@ -1,7 +1,6 @@
 import base64
 import json
 import os
-
 from google.cloud import storage
 
 service_account_b64 = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_SECRET")
@@ -16,7 +15,6 @@ if service_account_b64:
     print(f"✅ Service account file saved: {service_account_path}")
 else:
     print("❌ ERROR: GOOGLE_APPLICATION_CREDENTIALS_SECRET is not set.")
-
 
 client = storage.Client()
 bucket_name = "speak-smart"
