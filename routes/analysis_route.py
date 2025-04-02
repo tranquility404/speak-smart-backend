@@ -79,29 +79,23 @@ def convert_report_to_string(analysis_report: AnalysisReport|dict):
         data = json.dumps(analysis_report, indent=4, default=custom_serializer)
     return data
 
-@router.websocket("/analysis-report/{id}")
-async def websocket_endpoint(websocket: WebSocket, id: str, token: str = Query(None)):
-    current_user = await get_current_user_websocket(token)
-    if not token or not current_user:
-        await websocket.close(code=1008)  # 1008: Policy Violation
-        return
-
-    print("websocket started for id", id)
+@router.post("/analysis-report/{id}")
+async def websocket_endpoint(id: str, current_user: User = Depends(get_current_user)):
     if not id in analysis_requests:
         return
 
-    await websocket.accept()
+    print("analysis started for id", id)
     file_path: str = analysis_requests[id]["file_path"]
     analysis_report: AnalysisReport = analysis_requests[id]["report"]
 
     try:
         analyze_speech: AnalyzeSpeech = analysis_requests[id]["analyze_speech_obj"]
         data = convert_report_to_string(analysis_report)
-        await websocket.send_text(data)
+        # await websocket.send_text(data)
 
         if json.loads(data)["intonation_fig"]["status"] == "Loaded✅":
             print("audio already analysed")
-            return
+            return json.loads(data)
 
         tasks = [
             lambda: load_audio(file_path, analyze_speech),
@@ -118,7 +112,7 @@ async def websocket_endpoint(websocket: WebSocket, id: str, token: str = Query(N
 
         for completed_task in tasks:
             completed_task()
-            await websocket.send_text(convert_report_to_string(analysis_report))
+            # await websocket.send_text(convert_report_to_string(analysis_report))
 
         # Saving Report
         id = ObjectId()
@@ -127,14 +121,20 @@ async def websocket_endpoint(websocket: WebSocket, id: str, token: str = Query(N
         await save_report_to_db(id, analysis_report_url, analysis_report, str(current_user["email"]))
 
         analysis_report.status = "Loaded✅"
-        await websocket.send_text(convert_report_to_string(analysis_report))
 
-    except WebSocketDisconnect as e:
-        print("websocket closed", e.reason)
-    finally:
         if os.path.exists(file_path):
             os.remove(file_path)
-            print("File deleted due to error or disconnection or analysis completion.")
+            print("File deleted after analysis success")
+
+        return json.loads(convert_report_to_string(analysis_report))
+        # await websocket.send_text(convert_report_to_string(analysis_report))
+
+    except Exception as e:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            print("File deleted due to error.")
+            print("analysis ended due to error", e.reason)
+        return { "error": "Something went wrong"}
 
 
 @router.post("/upload-audio/")
